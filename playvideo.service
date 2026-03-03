@@ -1,0 +1,14 @@
+[Unit]
+Description=Play video on button press
+After=graphical.target display-manager.service
+Wants=graphical.target display-manager.service
+
+[Service]
+User=pi
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/pi/.Xauthority
+ExecStart=/usr/bin/python3 /home/pi/play.py
+Restart=always
+
+[Install]
+WantedBy=graphical.target
