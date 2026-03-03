@@ -4,7 +4,6 @@ import shlex
 import signal
 import subprocess
 import time
-print("sosat")
 import serial
 
 SERIAL_DEV = "/dev/rs485"   # если не делал udev — поставь "/dev/ttyUSB0"
