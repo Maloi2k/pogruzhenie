@@ -34,6 +34,8 @@ void rs485SendLine(const char* line) {
   rs485SetTransmit(true);
   rs485.print(line);
   rs485.print('\n');
+  Serial.println(line);
+  Serial.println('\n');
   rs485.flush();              // дождаться окончания передачи
   delayMicroseconds(50);
   rs485SetTransmit(false);
@@ -45,7 +47,7 @@ void setup() {
 
   pinMode(BTN1, INPUT_PULLUP);
   pinMode(BTN2, INPUT_PULLUP);
-
+  Serial.begin(9600);
   rs485.begin(BAUD);
 
   // (опционально) отладка по USB:
@@ -62,7 +64,7 @@ void loop() {
   }
   if (b1 == LOW && (millis() - lastChange1) > DEBOUNCE_MS) {
     // чтобы отправить команду один раз на нажатие — ждём отпускания
-    rs485SendLine("PLAY1");
+    rs485SendLine("1 PLAY 1");
     while (digitalRead(BTN1) == LOW) {
       delay(5);
     }
@@ -78,7 +80,7 @@ void loop() {
     lastBtn2 = b2;
   }
   if (b2 == LOW && (millis() - lastChange2) > DEBOUNCE_MS) {
-    rs485SendLine("PLAY2");
+    rs485SendLine("1 PLAY 2 LOOP");
     while (digitalRead(BTN2) == LOW) {
       delay(5);
     }

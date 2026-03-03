@@ -2,154 +2,305 @@
 import os
 import shlex
 import signal
+import socket
 import subprocess
 import time
 import serial
 
-SERIAL_DEV = "/dev/rs485"   # если не делал udev — поставь "/dev/ttyUSB0"
-BAUDRATE = 9600             # как на Arduino
+# ===== RS-485 =====
+SERIAL_DEV = "/dev/ttyUSB0"  # если не делал udev — поставь "/dev/ttyUSB0"
+BAUDRATE = 9600
 
+# ===== Видео =====
 BLACK_VIDEO = "/home/pi/videos/black.mp4"
+VIDEO_TEMPLATE = "/home/pi/videos/{n}.mp4"   # 1.mp4, 2.mp4, ...
 
-VIDEOS = {
-    "PLAY1": "/home/pi/videos/video1.mp4",
-    "PLAY2": "/home/pi/videos/video2.mp4",
+# ===== Адрес ноды =====
+NODE_ID = 1  # на каждой Raspberry своё число
+
+# ===== VLC RC (локальное управление) =====
+RC_HOST = "127.0.0.1"
+RC_PORT = 4212
+
+# Старые команды (на всякий случай для совместимости)
+LEGACY_MAP = {
+    "PLAY1": 1,
+    "PLAY2": 2,
 }
 
-def start_vlc_loop(filepath: str) -> subprocess.Popen:
-    # Зацикленное fullscreen видео (black.mp4)
-    cmd = (
-        f'cvlc --fullscreen --loop --no-video-title-show --no-osd '
-        f'--no-audio {shlex.quote(filepath)}'
-    )
-    return subprocess.Popen(
-        cmd,
-        shell=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid
-    )
-
-def start_vlc_play_once(filepath: str) -> subprocess.Popen:
-    # Проиграть 1 раз и завершиться
-    cmd = (
-        f'cvlc --fullscreen --play-and-exit --no-video-title-show --no-osd '
-        f'--no-audio {shlex.quote(filepath)}'
-    )
-    return subprocess.Popen(
-        cmd,
-        shell=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid
-    )
-
-def stop_proc(p: subprocess.Popen | None):
+def _kill_proc_group(p: subprocess.Popen | None):
     if not p:
         return
     if p.poll() is not None:
         return
     try:
-        # Завершаем всю группу процессов VLC
         os.killpg(os.getpgid(p.pid), signal.SIGTERM)
-        p.wait(timeout=3)
+        p.wait(timeout=2)
     except Exception:
         try:
             os.killpg(os.getpgid(p.pid), signal.SIGKILL)
         except Exception:
             pass
 
-class Player:
-    def __init__(self):
-        self.black_proc: subprocess.Popen | None = None
-        self.video_proc: subprocess.Popen | None = None
+def _start_vlc_rc() -> subprocess.Popen:
+    """
+    Запускаем VLC ОДИН раз и дальше управляем им по RC.
+    Это убирает "чёрный провал" при переключениях, потому что процесс/вывод не пересоздаются.
+    """
+    # ВАЖНО: звук включён (нет --no-audio)
+    cmd = (
+        f'cvlc --fullscreen --no-video-title-show --no-osd '
+        f'--extraintf rc --rc-host {RC_HOST}:{RC_PORT} '
+        f'{shlex.quote(BLACK_VIDEO)}'
+    )
+    return subprocess.Popen(
+        cmd,
+        shell=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        preexec_fn=os.setsid
+    )
 
-    def ensure_black(self):
-        # Если black уже крутится — ок
-        if self.black_proc and self.black_proc.poll() is None:
+def _rc_connect(timeout=0.4):
+    return socket.create_connection((RC_HOST, RC_PORT), timeout=timeout)
+
+def _rc_send(lines: list[str], retries: int = 2) -> None:
+    """
+    Шлём команды VLC RC.
+    Если порт временно не отвечает — пробуем ещё раз.
+    """
+    last_err = None
+    for _ in range(retries + 1):
+        try:
+            with _rc_connect() as s:
+                for line in lines:
+                    s.sendall((line + "\n").encode("utf-8"))
             return
-        # Останавливаем обычное видео, если вдруг есть
-        stop_proc(self.video_proc)
-        self.video_proc = None
+        except Exception as e:
+            last_err = e
+            time.sleep(0.08)
+    raise last_err  # noqa
 
-        if os.path.isfile(BLACK_VIDEO):
-            self.black_proc = start_vlc_loop(BLACK_VIDEO)
+def _rc_request(line: str, timeout=0.5) -> str:
+    """
+    Запрос с чтением ответа (нужен для status).
+    RC иногда шлёт приглашения/лишние строки — нам хватит простого текста.
+    """
+    with _rc_connect(timeout=timeout) as s:
+        s.settimeout(timeout)
+        s.sendall((line + "\n").encode("utf-8"))
+        chunks = []
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                data = s.recv(4096)
+                if not data:
+                    break
+                chunks.append(data.decode("utf-8", errors="ignore"))
+                # обычно status приходит сразу
+                if "state" in "".join(chunks).lower():
+                    break
+            except socket.timeout:
+                break
+        return "".join(chunks)
 
-    def stop_all(self):
-        stop_proc(self.video_proc)
-        stop_proc(self.black_proc)
-        self.video_proc = None
-        self.black_proc = None
+class PlayerRC:
+    def __init__(self):
+        self.vlc: subprocess.Popen | None = None
+        self.play_once_active = False  # мы запустили "один раз" и ждём окончания
 
-    def play_video(self, path: str):
-        # Переключаемся с black на видео
-        stop_proc(self.black_proc)
-        self.black_proc = None
+    def ensure_vlc(self):
+        """
+        Автовосстановление VLC:
+        - если процесс умер
+        - или RC-порт не отвечает
+        """
+        if self.vlc is None or self.vlc.poll() is not None:
+            self._restart_vlc()
+            return
 
-        stop_proc(self.video_proc)
-        self.video_proc = None
+        # Проверка, что RC живой
+        try:
+            _rc_send(["status"], retries=0)
+        except Exception:
+            self._restart_vlc()
 
-        if os.path.isfile(path):
-            self.video_proc = start_vlc_play_once(path)
+    def _restart_vlc(self):
+        _kill_proc_group(self.vlc)
+        self.vlc = _start_vlc_rc()
+
+        # ждём, пока поднимется RC
+        for _ in range(30):
+            try:
+                _rc_send(["status"], retries=0)
+                # после рестарта сразу уходим в black "вечно"
+                self.black()
+                return
+            except Exception:
+                time.sleep(0.1)
+
+        # если всё совсем плохо — оставим как есть, следующий ensure попробует снова
+        self.play_once_active = False
+
+    def black(self):
+        self.ensure_vlc()
+        self.play_once_active = False
+        # repeat on => повтор текущего элемента (black)
+        _rc_send([
+            "stop",
+            "clear",
+            f"add {BLACK_VIDEO}",
+            "loop off",
+            "repeat on",
+            "play",
+        ])
+
+    def play(self, n: int, loop: bool):
+        self.ensure_vlc()
+        path = VIDEO_TEMPLATE.format(n=n)
+        if not os.path.isfile(path):
+            self.black()
+            return
+
+        if loop:
+            # repeat on => повтор одного ролика
+            self.play_once_active = False
+            _rc_send([
+                "stop",
+                "clear",
+                f"add {path}",
+                "loop off",
+                "repeat on",
+                "play",
+            ])
         else:
-            # Если файла нет — возвращаем black
-            self.ensure_black()
+            # repeat off => один раз
+            self.play_once_active = True
+            _rc_send([
+                "stop",
+                "clear",
+                f"add {path}",
+                "loop off",
+                "repeat off",
+                "play",
+            ])
 
-    def stop_video_and_black(self):
-        # По STOP мы хотим вернуться на black-loop
-        stop_proc(self.video_proc)
-        self.video_proc = None
-        self.ensure_black()
+    def tick(self):
+        """
+        Периодический контроль:
+        если играли ONCE и VLC перешёл в stopped/ended — вернуться на black (repeat on).
+        """
+        if not self.play_once_active:
+            return
+
+        self.ensure_vlc()
+        try:
+            st = _rc_request("status", timeout=0.35).lower()
+            # На разных сборках VLC формулировки чуть гуляют, но "state" почти всегда есть.
+            if "state stopped" in st or "state end" in st or "state ended" in st:
+                self.black()
+        except Exception:
+            # если status не читается — ensure_vlc на следующем тике восстановит
+            pass
+
+def parse_line(line: str):
+    """
+    Новый формат:
+      "<ADDR> <CMD> [ARGS...]"
+    Примеры:
+      "1 PLAY 2 LOOP"
+      "3 PLAY 5"
+      "ALL STOP"
+    """
+    parts = line.strip().split()
+    if len(parts) < 2:
+        return None
+
+    addr_raw = parts[0].upper()
+    cmd = parts[1].upper()
+    args = parts[2:]
+
+    if addr_raw == "ALL":
+        addr = "ALL"
+    else:
+        try:
+            addr = int(addr_raw)
+        except ValueError:
+            return None
+
+    return addr, cmd, args
 
 def main():
-    player = Player()
-
-    # На старте — крутим black-loop
-    player.ensure_black()
+    player = PlayerRC()
+    player.black()
 
     while True:
         try:
-            with serial.Serial(SERIAL_DEV, BAUDRATE, timeout=1) as ser:
+            with serial.Serial(SERIAL_DEV, BAUDRATE, timeout=0.2) as ser:
                 ser.reset_input_buffer()
 
                 while True:
-                    # Если обычное видео само закончилось — вернём black
-                    if player.video_proc and player.video_proc.poll() is not None:
-                        player.video_proc = None
-                        player.ensure_black()
+                    # фоновые проверки (возврат в black после ONCE + автоподнятие VLC)
+                    player.tick()
 
                     raw = ser.readline()
                     if not raw:
                         continue
 
-                    cmd = raw.decode(errors="ignore").strip().upper()
-                    if not cmd:
+                    line = raw.decode(errors="ignore").strip()
+                    if not line:
                         continue
 
-                    if cmd in VIDEOS:
-                        player.play_video(VIDEOS[cmd])
+                    # ===== Legacy (PLAY1/PLAY2) =====
+                    up = line.upper()
+                    if up in LEGACY_MAP:
+                        player.play(LEGACY_MAP[up], loop=False)
+                        continue
+                    if up in ("STOP", "BLACK", "REBOOT"):
+                        # старый формат без адреса — можно считать "ALL" или "только мне"
+                        # сделаем: только мне (чтобы на общей шине не ломало всех)
+                        if up == "REBOOT":
+                            subprocess.Popen(["sudo", "reboot"])
+                            time.sleep(0.05)
+                        else:
+                            player.black()
+                        continue
 
-                    elif cmd == "STOP":
-                        player.stop_video_and_black()
+                    # ===== New protocol =====
+                    parsed = parse_line(line)
+                    if not parsed:
+                        continue
+                    addr, cmd, args = parsed
 
-                    elif cmd == "BLACK":
-                        # принудительно перейти в black (даже если видео играет)
-                        player.stop_video_and_black()
+                    # фильтр по адресу
+                    if addr != "ALL" and addr != NODE_ID:
+                        continue
+
+                    if cmd == "PLAY":
+                        if not args:
+                            continue
+                        try:
+                            n = int(args[0])
+                        except ValueError:
+                            continue
+                        mode = args[1].upper() if len(args) >= 2 else "ONCE"
+                        loop = (mode == "LOOP")
+                        player.play(n, loop=loop)
+
+                    elif cmd in ("STOP", "BLACK"):
+                        player.black()
 
                     elif cmd == "REBOOT":
-                        # опционально: если хочешь
                         subprocess.Popen(["sudo", "reboot"])
-
-                    time.sleep(0.05)
+                        time.sleep(0.05)
 
         except serial.SerialException:
-            # порт временно пропал — просто держим black и пытаемся переподключиться
-            player.ensure_black()
-            time.sleep(1)
-
+            # порт временно пропал — держим black, пробуем снова
+            player.black()
+            time.sleep(0.5)
         except Exception:
-            player.ensure_black()
-            time.sleep(1)
+            player.black()
+            time.sleep(0.5)
 
 if __name__ == "__main__":
     main()
