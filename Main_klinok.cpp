@@ -175,21 +175,14 @@ void loop() {
   updateLampBlink();
 }
 
-void rs485SetTransmit(bool on) {
-  // DE=1 и /RE=1 (если /RE тоже на этом пине) => передача
-  // DE=0 и /RE=0 => приём
-  digitalWrite(PIN_RS485_DE_RE, on ? HIGH : LOW);
-  // Небольшая пауза, чтобы MAX485 успел переключиться
-  delayMicroseconds(20);
-}
 
 void rs485SendLine(const char* line) {
   rs485SetTransmit(true);
-  Serial3.print(line);
-  Serial3.print('\n');
+  rs485.print(line);
+  rs485.print('\n');
   Serial.println(line);
   Serial.println('\n');
-  Serial3.flush();              // дождаться окончания передачи
+  rs485.flush();              // дождаться окончания передачи
   delayMicroseconds(50);
   rs485SetTransmit(false);
 }
@@ -216,12 +209,10 @@ void checkButton(Button &btn, void (*callback)()) {
 
 /* ================== ОБРАБОТЧИКИ ================== */
 void onOpenPressed() {
-  if (digitalRead(DOOR2) == LOW) {
-    relayOff(DOOR2);
+  if (digitalRead(DOOR2) == LOW) {relayOFF(DOOR2);
     Serial.println("Открыли дверь кондуктора");
   }
-  if (digitalRead(DOOR2) == HIGH) {
-    relayOn(DOOR2);
+  if (digitalRead(DOOR2) == HIGH) {relayOn(DOOR2);
     Serial.println("Закрыли дверь кондуктора");
   }
 }
@@ -253,8 +244,7 @@ void resetQuest() {
   relayOn(DOOR4);
   relayOn(LIGHT);
   relayOn(POZVON);
-  relayOn(PROVOD);
-  stopLampBlink(true);
+  relayOn(PROVOD)
   //
   currentStep = 0;
   currentSubstep = 0;
@@ -312,7 +302,7 @@ void runStep(uint8_t step) {
 
     case 4:
       relayOff(DOOR1);
-      player1.play(3); // Открываем дверь во вторую комнату + Фон 2 комната
+      player1.play(3) // Открываем дверь во вторую комнату + Фон 2 комната
       break;
 
     case 5:
@@ -451,7 +441,7 @@ void runSubstep(uint8_t step, uint8_t sub) {
         break;
 
       case 2:
-        player1.play(7);
+        player1.play(7) 
         startLampBlink(1000); // Сирена + моргание света
         break;
     }
