@@ -95,6 +95,14 @@ bool lampBlinkEnabled = false;
 unsigned long lampBlinkInterval = 250;   // мс (половина периода)
 unsigned long lampBlinkLastToggle = 0;
 bool lampBlinkStateOn = false;
+bool lampBlinkDelayed = false;
+unsigned long lampBlinkStartTime = 0;
+
+void startLampBlinkDelayed(unsigned long delayMs, unsigned long intervalMs) {
+  lampBlinkDelayed = true;
+  lampBlinkStartTime = millis() + delayMs;
+  lampBlinkInterval = intervalMs;
+}
 
 void startLampBlink(unsigned long intervalMs) {
   lampBlinkEnabled = true;
@@ -111,6 +119,13 @@ void stopLampBlink(bool leaveOn) {
 }
 
 void updateLampBlink() {
+
+  // проверяем отложенный старт
+  if (lampBlinkDelayed && millis() >= lampBlinkStartTime) {
+    lampBlinkDelayed = false;
+    startLampBlink(lampBlinkInterval);
+  }
+
   if (!lampBlinkEnabled) return;
 
   unsigned long now = millis();
@@ -330,7 +345,7 @@ void runStep(uint8_t step) {
       break;
 
     case 8:
-      relayPulse(OK4, 300); // Открыли окно 4
+      relayPulse(OK4, 300); // Открыли окно 3
       break;
 
     case 9:
@@ -351,20 +366,17 @@ void runStep(uint8_t step) {
       break;
 
     case 12:
-      relayOn(PROVOD);  // ПРовода активировали
-      break;
-
-    case 13:
       player2.play(12); // Зацикленный стук сердца
       break;
 
-    case 14:
+    case 13:
+      player2.stop();
       relayOff(DOOR4);
       relayOff(PROVOD);
-      player1.play(6); // Открылась дверь в последнюю комнату + Трек фон 4 комната
+      player1.play(6); // Открылась дверь в последнюю комнату + Трек фон 4 комната + выключили стук сердца
       break;
 
-    case 15:
+    case 14:
       player1.play(8); // финальная музыка
       stopLampBlink(true);
       break;
@@ -382,11 +394,11 @@ void runSubstep(uint8_t step, uint8_t sub) {
         break;
 
       case 2:
-        player2.play(1); // Гонг
+        player2.play(1); // звук Гонг
         break;
 
       case 3:
-        player2.play(2); // Признание силы
+        player2.play(2); //звук Признание силы
         break;
     }
   }
@@ -394,11 +406,15 @@ void runSubstep(uint8_t step, uint8_t sub) {
   if (step == 4) {
     switch (sub) {
       case 1:
-        player2.play(3); // Приготовьте билеты к проверке
+        player2.play(3); // звук Приготовьте билеты к проверке
         break;
 
       case 2:
-        player2.play(4); // Дорога длинная (Длинная мантра чтоб заснуть)
+        player2.play(4); // звук Дорога длинная (Длинная мантра чтоб заснуть)
+        break;
+
+      case 3:
+        player2.stop(); // Остановка воспроизведения мантры
         break;
     }
   }
@@ -406,11 +422,11 @@ void runSubstep(uint8_t step, uint8_t sub) {
   if (step == 5) {
     switch (sub) {
       case 1:
-        player2.play(5); // Все должны сесть согласно купленным билетам
+        player2.play(5); //звук Все должны сесть согласно купленным билетам
         break;
 
       case 2:
-        player2.play(6); // Склонись перед энму
+        player2.play(6); //звук Склонись перед энму
         break;
     }
   }
@@ -418,8 +434,9 @@ void runSubstep(uint8_t step, uint8_t sub) {
   if (step == 7) {
     switch (sub) {
       case 1:
+        player2.stop();
         relayPulse(OK3, 300);
-        relayOff(GLAZ); // Глаза выключились окно 3 открылось
+        relayOff(GLAZ); // Глаза выключились окно 2 открылось, чел замолчал
         break;
     }
   }
@@ -427,7 +444,7 @@ void runSubstep(uint8_t step, uint8_t sub) {
   if (step == 10) {
     switch (sub) {
       case 1:
-        relayOn(KRIK); // Откалибровали крикометр
+        relayOn(KRIK); //включили и  Откалибровали крикометр
         break;
 
       case 2:
@@ -444,7 +461,7 @@ void runSubstep(uint8_t step, uint8_t sub) {
     }
   }
 
-  if (step == 14) {
+  if (step == 13) {
     switch (sub) {
       case 1:
         relayOff(POZVON); // Открыли позвоночник
@@ -452,7 +469,7 @@ void runSubstep(uint8_t step, uint8_t sub) {
 
       case 2:
         player1.play(7);
-        startLampBlink(1000); // Сирена + моргание света
+        startLampBlinkDelayed(18500, 1000); // Сирена + моргание света
         break;
     }
   }
