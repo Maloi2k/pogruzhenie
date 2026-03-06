@@ -7,13 +7,31 @@ import subprocess
 import time
 import serial
 
+DEBUG = True
+
+
+def debug(msg):
+    if DEBUG:
+        print(msg, flush=True)
+
+def hide_cursor():
+    try:
+        subprocess.Popen(
+            ["unclutter", "-display", ":0", "-idle", "0", "-root"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 # ===== RS-485 =====
 SERIAL_DEV = "/dev/ttyUSB0"  # если не делал udev — поставь "/dev/ttyUSB0"
 BAUDRATE = 9600
 
 # ===== Видео =====
 BLACK_VIDEO = "/home/pi/videos/black.mp4"
-VIDEO_TEMPLATE = "/home/pi/videos/{n}.mp4"   # 1.mp4, 2.mp4, ...
+VIDEO_TEMPLATE = "/home/pi/videos/{n}.mp4"  # 1.mp4, 2.mp4, ...
 
 # ===== Адрес ноды =====
 NODE_ID = 1  # на каждой Raspberry своё число
@@ -42,6 +60,7 @@ def _kill_proc_group(p: subprocess.Popen | None):
         except Exception:
             pass
 
+
 def _start_vlc_rc() -> subprocess.Popen:
     """
     Запускаем VLC ОДИН раз и дальше управляем им по RC.
@@ -49,20 +68,22 @@ def _start_vlc_rc() -> subprocess.Popen:
     """
     # ВАЖНО: звук включён (нет --no-audio)
     cmd = (
-        f'cvlc --fullscreen --no-video-title-show --no-osd '
-        f'--extraintf rc --rc-host {RC_HOST}:{RC_PORT} '
-        f'{shlex.quote(BLACK_VIDEO)}'
+        f"cvlc --fullscreen --no-video-title-show --no-osd "
+        f"--extraintf rc --rc-host {RC_HOST}:{RC_PORT} "
+        f"{shlex.quote(BLACK_VIDEO)}"
     )
     return subprocess.Popen(
         cmd,
         shell=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        preexec_fn=os.setsid
+        preexec_fn=os.setsid,
     )
+
 
 def _rc_connect(timeout=0.4):
     return socket.create_connection((RC_HOST, RC_PORT), timeout=timeout)
+
 
 def _rc_send(lines: list[str], retries: int = 2) -> None:
     """
@@ -80,6 +101,7 @@ def _rc_send(lines: list[str], retries: int = 2) -> None:
             last_err = e
             time.sleep(0.08)
     raise last_err  # noqa
+
 
 def _rc_request(line: str, timeout=0.5) -> str:
     """
@@ -103,6 +125,7 @@ def _rc_request(line: str, timeout=0.5) -> str:
             except socket.timeout:
                 break
         return "".join(chunks)
+
 
 class PlayerRC:
     def __init__(self):
@@ -145,63 +168,79 @@ class PlayerRC:
     def black(self):
         self.ensure_vlc()
         self.play_once_active = False
-        # repeat on => повтор текущего элемента (black)
-        _rc_send([
-            "stop",
-            "clear",
-            f"add {BLACK_VIDEO}",
-            "loop off",
-            "repeat on",
-            "play",
-        ])
+
+        _rc_send(["stop"], retries=2)
+        time.sleep(0.05)
+        _rc_send(["clear"], retries=2)
+        time.sleep(0.05)
+        _rc_send([f"add {BLACK_VIDEO}"], retries=2)
+        time.sleep(0.05)
+        _rc_send(
+            [
+                "repeat on",
+                "loop off",
+                "play",
+            ],
+            retries=2,
+        )
 
     def play(self, n: int, loop: bool):
         self.ensure_vlc()
         path = VIDEO_TEMPLATE.format(n=n)
+
         if not os.path.isfile(path):
             self.black()
             return
 
+        _rc_send(["stop"], retries=2)
+        time.sleep(0.05)
+        _rc_send(["clear"], retries=2)
+        time.sleep(0.05)
+        _rc_send([f"add {path}"], retries=2)
+        time.sleep(0.05)
+
         if loop:
-            # repeat on => повтор одного ролика
             self.play_once_active = False
-            _rc_send([
-                "stop",
-                "clear",
-                f"add {path}",
-                "loop off",
-                "repeat on",
-                "play",
-            ])
+            _rc_send(
+                [
+                    "repeat on",
+                    "loop off",
+                    "play",
+                ],
+                retries=2,
+            )
         else:
-            # repeat off => один раз
             self.play_once_active = True
-            _rc_send([
-                "stop",
-                "clear",
-                f"add {path}",
-                "loop off",
-                "repeat off",
-                "play",
-            ])
+            _rc_send(
+                [
+                    "repeat off",
+                    "loop off",
+                    "play",
+                ],
+                retries=2,
+            )
 
     def tick(self):
-        """
-        Периодический контроль:
-        если играли ONCE и VLC перешёл в stopped/ended — вернуться на black (repeat on).
-        """
+        self.ensure_vlc()
+
         if not self.play_once_active:
             return
 
-        self.ensure_vlc()
         try:
             st = _rc_request("status", timeout=0.35).lower()
-            # На разных сборках VLC формулировки чуть гуляют, но "state" почти всегда есть.
+
             if "state stopped" in st or "state end" in st or "state ended" in st:
                 self.black()
+                return
+
+            # дополнительная защита:
+            # если somehow включился repeat, принудительно выключаем
+            if "repeat: on" in st:
+                _rc_send(["repeat off", "loop off"], retries=1)
+
         except Exception:
-            # если status не читается — ensure_vlc на следующем тике восстановит
             pass
+
 
 def parse_line(line: str):
     """
@@ -230,7 +269,10 @@ def parse_line(line: str):
 
     return addr, cmd, args
 
+
 def main():
+    hide_cursor()
+
     player = PlayerRC()
     player.black()
 
@@ -250,6 +292,8 @@ def main():
                     line = raw.decode(errors="ignore").strip()
                     if not line:
                         continue
+
+                    debug(f"RS485 RX: {line}")
 
                     # ===== Legacy (PLAY1/PLAY2) =====
                     up = line.upper()
@@ -284,7 +328,7 @@ def main():
                         except ValueError:
                             continue
                         mode = args[1].upper() if len(args) >= 2 else "ONCE"
-                        loop = (mode == "LOOP")
+                        loop = mode == "LOOP"
                         player.play(n, loop=loop)
 
                     elif cmd in ("STOP", "BLACK"):
@@ -301,6 +345,7 @@ def main():
         except Exception:
             player.black()
             time.sleep(0.5)
+
 
 if __name__ == "__main__":
     main()

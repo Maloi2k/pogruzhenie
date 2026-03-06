@@ -231,12 +231,11 @@ void checkButton(Button &btn, void (*callback)()) {
 
 /* ================== ОБРАБОТЧИКИ ================== */
 void onOpenPressed() {
-  if (digitalRead(DOOR2) == LOW) {
-    relayOff(DOOR2);
+  if (digitalRead(RELAYS[DOOR2]) == LOW) {
+    relayOff(DOOR2); // было закрыто -> открываем
     Serial.println("Открыли дверь кондуктора");
-  }
-  if (digitalRead(DOOR2) == HIGH) {
-    relayOn(DOOR2);
+  } else {
+    relayOn(DOOR2);  // было открыто -> закрываем
     Serial.println("Закрыли дверь кондуктора");
   }
 }
