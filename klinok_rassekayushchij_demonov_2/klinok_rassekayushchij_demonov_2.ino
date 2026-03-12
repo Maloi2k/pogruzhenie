@@ -477,7 +477,7 @@ void runSubstep(uint8_t step, uint8_t sub) {
 
       case 2:
         player2.play(13);
-        startLampBlink( 800); // Сирена + моргание света
+        startLampBlinkDelayed(5000, 800); // Сирена + моргание света
         break;
     }
   }
