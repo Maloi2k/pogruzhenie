@@ -269,6 +269,9 @@ void resetQuest() {
   relayOn(POZVON);
   relayOn(PROVOD);
   stopLampBlink(true);
+
+  player1.volume(25);
+  player2.volume(25);
   //
   currentStep = 0;
   currentSubstep = 0;
@@ -372,11 +375,13 @@ void runStep(uint8_t step) {
       player2.stop();
       relayOff(DOOR4);
       relayOff(PROVOD);
+      player1.volume(25);
       player1.play(6); // Открылась дверь в последнюю комнату + Трек фон 4 комната + выключили стук сердца
       break;
 
     case 14:
-      player1.play(8); // финальная музыка
+      player1.volume(25);
+      player1.play(7); // финальная музыка
       stopLampBlink(true);
       break;
   }
@@ -397,6 +402,7 @@ void runSubstep(uint8_t step, uint8_t sub) {
         break;
 
       case 3:
+        player2.volume(30);
         player2.play(2); //звук Признание силы
         break;
     }
@@ -405,6 +411,7 @@ void runSubstep(uint8_t step, uint8_t sub) {
   if (step == 4) {
     switch (sub) {
       case 1:
+        player2.volume(25);
         player2.play(3); // звук Приготовьте билеты к проверке
         break;
 
@@ -463,12 +470,14 @@ void runSubstep(uint8_t step, uint8_t sub) {
   if (step == 13) {
     switch (sub) {
       case 1:
+        player2.volume(30);
+        player2.play(14);
         relayOff(POZVON); // Открыли позвоночник
         break;
 
       case 2:
-        player1.play(7);
-        startLampBlinkDelayed(18500, 1000); // Сирена + моргание света
+        player2.play(13);
+        startLampBlink( 800); // Сирена + моргание света
         break;
     }
   }
