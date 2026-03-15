@@ -432,7 +432,20 @@ void runSubstep(uint8_t step, uint8_t sub) {
         break;
 
       case 2:
-        player2.play(6); //звук Склонись перед энму
+        player2.play(18); //звук вы сидите не правильно
+        break;
+
+      case 3:
+        player2.play(6); // звук склонитесь перед энму
+        break;
+
+    }
+  }
+
+  if (step == 6) {
+    switch (sub) {
+      case 1:
+        player2.play(15); //звук ребята просыпайтесь
         break;
     }
   }
@@ -443,6 +456,22 @@ void runSubstep(uint8_t step, uint8_t sub) {
         player2.stop();
         relayPulse(OK3, 300);
         relayOff(GLAZ); // Глаза выключились окно 2 открылось, чел замолчал
+        break;
+
+      case 2:
+        player2.play(16); // звук проснитесь вы во власти демона
+        break;
+
+      case 3:
+        player2.play(17); // звук проснитесь вы во власти демона
+        break;
+    }
+  }
+
+  if (step == 9) {
+    switch (sub) {
+      case 1:
+        player2.play(19); // звук проснитесь вы во власти демона
         break;
     }
   }
